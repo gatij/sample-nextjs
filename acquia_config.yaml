@@ -1,1 +1,1 @@
-enableExternalCICD: true
+enable-prebuilt-artifact: true
