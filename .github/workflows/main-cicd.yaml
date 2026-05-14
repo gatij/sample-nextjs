@@ -1,11 +1,10 @@
 name: CI + CD
 
-on: 
-  workflow_dispatch  # Manual trigger only - won't run automatically
-# on:
-#   push:
-#     branches:
-#       - main  # or your desired source branch
+on:
+  push:
+    tags:
+      - 'v*'      # Triggers on any tag starting with 'v' (e.g., v1.0.0)
+  workflow_dispatch: # Keeps manual trigger capability
 
 jobs:
   build-and-push:
@@ -14,11 +13,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Ensures tags are available
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           
       - name: Install dependencies
         run: npm install
@@ -26,23 +27,14 @@ jobs:
       - name: Build Next.js
         run: npm run build
 
-      # If you want to push the .next and other build folders, you may need to prepare that
-      # e.g. copy build output to a separate directory
-
       - name: Prepare build directory
         run: |
           rm -rf build-output
           mkdir build-output
-          cp -R public pages package.json next.config.js acquia_config.yaml node_modules build-output/
-          # Add any other files you need
-
-      - name: Set up git
-        run: |
-          cd build-output
-          git init
-          git config user.name "omkar-mane"
-          git config user.email "omkar.mane@acquia.com"
-          git remote add target nodejsacn@svn-1565.gardens.hosting.acquia.com:nodejsacn.git
+          # Note: Ensure .next/standalone is included if using standalone output
+          cp -R public package.json next.config.js acquia_config.yaml node_modules build-output/
+          # If using Next.js default build, you likely need the .next folder:
+          # cp -R .next build-output/
 
       - name: Set up SSH for SVN
         run: |
@@ -51,14 +43,30 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H svn-1565.gardens.hosting.acquia.com >> ~/.ssh/known_hosts
 
-      - name: Commit and push
+      - name: Commit and Push Tag
         run: |
+          # Get the tag name from the GitHub Ref (e.g., refs/tags/v1.0.0 -> v1.0.0)
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          
           cd build-output
-          git checkout -b ext-ci-cd-github
+          git init
+          git config user.name "gatij"
+          git config user.email "gatij.jain@acquia.com"
+          git remote add target nodejsacn@svn-1565.gardens.hosting.acquia.com:nodejsacn.git
+          
+          # We create a detached head commit of the build artifacts
           git add .
-          git commit -m "Build output from GitHub Actions"
-          git push --force target ext-ci-cd-github
-      
+          git commit -m "Build output for $TAG_NAME"
+          
+          # Create a tag on the new commit and push it to the target
+          git tag $TAG_NAME
+          git push --force target $TAG_NAME
+
       - name: Trigger deployment
-        run : |
-          ./deploy.sh --client-id=${{ secrets.CLIENT_ID }} --client-secret=${{ secrets.CLIENT_SECRET }} --environment-id=32846-650d343b-a0f4-46ca-9001-0fc7f8acebe7 --branch=ext-ci-cd-github
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          # Pass the tag name to the --branch parameter as Acquia API usually treats them interchangeably
+          ./deploy.sh --client-id=${{ secrets.CLIENT_ID }} \
+                      --client-secret=${{ secrets.CLIENT_SECRET }} \
+                      --environment-id=32846-650d343b-a0f4-46ca-9001-0fc7f8acebe7 \
+                      --branch="tags/$TAG_NAME"
